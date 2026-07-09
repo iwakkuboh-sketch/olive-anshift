@@ -1864,7 +1864,7 @@ async function writeToShuukei(input){
         const fmtKey=mdToFmt[md];
         if(!fmtKey) return;
         const v=agg.byName[csvName][fmtKey]||"";
-        const mark = v==="○"?"〇" : v==="×"?"✕" : v==="△"?"△" : "";
+        const mark = v==="○"?"○" : v==="×"?"×" : v==="△"?"△" : "";
         const addr=XLSX.utils.encode_cell({r:targetRow, c:colIdx});
         if(!ws[addr]){
           // 新規セル：同行A列（氏名セル）から罫線スタイルをコピー
@@ -1887,6 +1887,71 @@ async function writeToShuukei(input){
         if(refCell&&refCell.s) ws[cmtAddr].s=refCell.s;
       }
     });
+
+    // ── 出勤可能回数（○の日数）を集計してAM相当列に書き込む ──
+    // 「出勤可能」「回数」を含む列ヘッダーを探す
+    let countColIdx = -1;
+    for(let c=0; c<200; c++){
+      const a = XLSX.utils.encode_cell({r: hdrRowIdx, c});
+      const v = ws[a]&&ws[a].v;
+      if(v && String(v).includes("回数")){ countColIdx=c; break; }
+      if(v && String(v).includes("出勤可能")){ countColIdx=c; }
+    }
+    // 見つからなければ日付列の次の次（備考の次）に追加
+    if(countColIdx < 0) countColIdx = cmtColIdx + 1;
+
+    // ヘッダーに書き込む
+    const countHdrAddr = XLSX.utils.encode_cell({r: hdrRowIdx, c: countColIdx});
+    if(!ws[countHdrAddr]) ws[countHdrAddr]={};
+    ws[countHdrAddr].t="s"; ws[countHdrAddr].v="出勤可能回数"; ws[countHdrAddr].w="出勤可能回数";
+
+    // 各スタッフ行に○の日数をカウント
+    Object.keys(nameRowMap).forEach(cleanName=>{
+      const ri = nameRowMap[cleanName];
+      // 〇（まるかな/まるかん）の数をカウント
+      let cnt = 0;
+      Object.entries(dateColMap).forEach(([md, ci])=>{
+        const a = XLSX.utils.encode_cell({r:ri, c:ci});
+        const v = ws[a]&&ws[a].v;
+        if(v==="○") cnt++;
+      });
+      const a = XLSX.utils.encode_cell({r:ri, c:countColIdx});
+      const refCell = ws[XLSX.utils.encode_cell({r:ri, c:0})];
+      if(!ws[a]) ws[a]={};
+      ws[a].t="n"; ws[a].v=cnt; ws[a].w=String(cnt);
+      if(refCell&&refCell.s) ws[a].s=refCell.s;
+    });
+
+    // シート範囲を回数列まで拡張
+    ws["!ref"] = XLSX.utils.encode_range({
+      s:{r:0,c:0},
+      e:{r:data.length-1, c:Math.max(cmtColIdx, countColIdx)}
+    });
+
+    // ── 罫線・書式を整備（フォント12pt・thin罫線） ──
+    const thinB = {style:'thin',color:{auto:1}};
+    const mkBorder = ()=>({top:thinB,bottom:thinB,left:thinB,right:thinB});
+    const mkFont = (bold,sz)=>({name:'Arial',bold,sz});
+
+    // 全セルに罫線・フォント12ptを適用
+    for(let r=hdrRowIdx; r<data.length; r++){
+      for(let c=0; c<=Math.max(cmtColIdx, countColIdx>=0?countColIdx:0); c++){
+        const a=XLSX.utils.encode_cell({r,c});
+        if(!ws[a]) ws[a]={t:'s',v:''};
+        const isHdr = r===hdrRowIdx;
+        const isNameCol = c===0;
+        const isCountCol = c===countColIdx;
+        ws[a].s={
+          font: mkFont(isHdr||isCountCol, 12),
+          border: mkBorder(),
+          alignment:{
+            horizontal: isNameCol&&!isHdr?'left':'center',
+            vertical:'center',
+            wrapText: isNameCol||isCountCol||isHdr
+          }
+        };
+      }
+    }
 
     // ── ログシートを追加 ──
     const logSheetName = "ログ";
